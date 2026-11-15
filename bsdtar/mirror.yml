@@ -1,0 +1,192 @@
+## mirror-hermeticbuild — spec for ocx.sh/hermeticbuild/bsdtar.
+##
+## No mirror-base.yml and no `extends:`: one package, every key package-owned,
+## and `extends:` is a SHALLOW merge whose classic failure is a child restating
+## `platforms:` and silently dropping `containers:` (mirror-gohugoio and
+## mirror-astral-sh ship the same single-file shape).
+
+name: bsdtar
+
+# Namespace = the DISTRIBUTOR whose bytes are shipped (create-mirror Phase 1:
+# `astral-sh/python-build-standalone`, not `python/cpython`). The bytes are
+# hermeticbuild's prebuilt of libarchive's bsdtar, so `hermeticbuild/bsdtar`;
+# the package segment names what the bytes are. The executable on PATH keeps
+# upstream's own asset name, `tar` (`tar.exe` on Windows) — see asset_type.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/hermeticbuild/bsdtar
+
+# ─── Versioning — irregular upstream tags, the decision ─────────────────────
+#
+# Upstream tags are packaging revisions over a libarchive version:
+#   v3.7.2 v3.7.2-1 v3.7.4 v3.7.4-2 v3.7.4-3 v3.7.4-4 v3.7.5 v3.7.5-1
+#   v3.7.5-2 v3.7.9 v3.8.1 v3.8.1-fix.1 v3.8.1-3        (13 releases)
+# and each revision ships DIFFERENT bytes (e.g. 3.8.1-3 drops the Windows
+# vcruntime140.dll dependency), so all of them are mirrored.
+#
+# `github_release` cannot express this and was measured against the real tag
+# list with `package check --dry-run` / `pipeline plan`:
+#   - one optional-suffix pattern maps v3.8.1, v3.8.1-fix.1 and v3.8.1-3 all to
+#     `3.8.1` (three versions, one name — collision);
+#   - capturing the revision into the version (`3.8.1-3`) is a semver
+#     PRE-RELEASE: it sorts BELOW `3.8.1`, so the newest rebuild would never be
+#     the cascade head, and prerelease versions get no rolling tags;
+#   - plain tags only (`3.7.2 3.7.4 3.7.5 3.7.9 3.8.1`) would drop every fix.
+# So a url_index generator (scripts/generate.py) maps the revision to BUILD
+# METADATA, `<libarchive>+<NN>`: plain tag -> `+00`, `-N` / `-fix.N` -> `+NN`
+# (v3.8.1-fix.1 -> 3.8.1+01, v3.8.1-3 -> 3.8.1+03). Rationale for each piece:
+#   - `+00` for the plain tag, not a bare `3.8.1`: a bare exact tag would be the
+#     same string as the cascade tag `3.8.1` and the two would fight over it.
+#   - Zero-padded to two digits: build metadata compares as a STRING
+#     (`_10001 < _8001`, ocx#396), so unpadded `+10` would sort under `+9`.
+#     Padding keeps it numeric-correct through revision 99; the generator fails
+#     loudly on a collision.
+#   - `build_timestamp: none`, forced not preferred: a version that already
+#     carries build metadata is refused a second stamp and `date` would EMPTY
+#     the mirror (python-build-standalone precedent). The revision is the
+#     build discriminator, so exact tags never re-point.
+# The generator also supplies each asset's sha256 from the release's own
+# SHA256.txt; `verify.url_index_digest: require` makes a missing digest a
+# failure rather than silent degradation (github_asset_digest does not exist for
+# url_index sources).
+source:
+  type: url_index
+  generator:
+    command: ["uv", "run", "scripts/generate.py"]
+    timeout_seconds: 240
+
+skip_prereleases: true
+cascade: true
+build_timestamp: none
+
+verify:
+  url_index_digest: require
+
+concurrency:
+  max_downloads: 8
+  max_bundles: 4
+  max_pushes: 2
+  rate_limit_ms: 100
+  max_retries: 3
+  compression_threads: 0
+
+# `off`: raw binary, PATH is a bare ${installPath}, so `auto`/`verify` would
+# fail spec load (exit 65). `binaries: ["tar"]` is hand-listed in metadata.json.
+bin_scan: off
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# Measured on both arches at the newest (v3.8.1-3), oldest (v3.7.2) and a
+# mid-range (v3.7.5-2) release:
+#
+#   $ file tar_linux_amd64   (v3.8.1-3)
+#     ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie
+#     linked, not stripped
+#   $ file tar_linux_arm64   (v3.8.1-3)
+#     ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), static-pie
+#     linked, not stripped
+#   $ file tar_linux_{amd64,arm64}   (v3.7.2, v3.7.5-2)
+#     ELF 64-bit LSB executable, …, statically linked, stripped
+#   $ readelf -l tar_linux_*  | grep -c INTERP    -> 0   (all four, new + old)
+#   $ readelf -d tar_linux_*  | grep -c NEEDED     -> 0
+#
+# No PT_INTERP and no NEEDED entries: static, so it requires NOTHING of the
+# host's libc and both Linux keys are BARE. Hence the full container set:
+# ubuntu + alpine + fedora (the alpine leg is the only evidence the universal
+# claim is honest).
+#
+# ─── Platform resolution — verified BOTH ways ───────────────────────────────
+#
+# Every declared platform matches exactly one asset (anchored ^…$; SHA256.txt
+# never matches) for the newest (3.8.1+03: all six) and oldest (3.7.2+00:
+# linux/darwin only) release; `package check --dry-run` reports no ambiguity.
+# Upstream coverage: linux/darwin amd64+arm64 from 3.7.2, windows/amd64 from
+# 3.7.4+04, windows/arm64 from 3.7.9. An older version simply resolves no asset
+# for a later-added platform and self-skips — no per-platform floor needed.
+# Windows spelling drifted: `tar_windows_amd64.exe` on v3.7.5 only,
+# `tar_windows_x86_64.exe` everywhere else, so one pattern admits both (no
+# release carries both, so it never double-matches).
+# Completeness: upstream ships exactly these six names per release
+# (+ SHA256.txt), all declared. All six are uniform raw binaries, so every
+# platform ships in the first push.
+assets:
+  linux/amd64:
+    - "^tar_linux_amd64$"
+  linux/arm64:
+    - "^tar_linux_arm64$"
+  darwin/amd64:
+    - "^tar_darwin_amd64$"
+  darwin/arm64:
+    - "^tar_darwin_arm64$"
+  windows/amd64:
+    - "^tar_windows_(?:x86_64|amd64)\\.exe$"
+  windows/arm64:
+    - "^tar_windows_arm64\\.exe$"
+
+# Raw binaries, one file per platform. The asset prefix carries the name `tar`
+# and that is what lands on PATH (owner decision 2026-11-15: keep upstream's
+# name, do NOT rename to bsdtar). Consequence: putting this package on PATH
+# shadows the host `tar` — intentional, it is what this package is for.
+# `.exe` is appended on Windows because the asset carries it.
+asset_type:
+  type: binary
+  name: tar
+
+metadata:
+  default: metadata.json
+
+catalog:
+  logo: ../logo.svg
+
+versions:
+  # `.0`, not `3.7.2`: Version ordering sorts a version WITH build metadata
+  # BELOW the same version without it (`Some(build) < None`,
+  # ocx_lib/src/package/version.rs), so a floor of "3.7.2" silently drops
+  # `3.7.2+00` and `3.7.2+01` — observed on `pipeline plan` (11 of 13 listed).
+  min: "3.7.0"
+  new_per_run: 13
+  poll_interval: "28 0-23/6 * * *"
+
+tests:
+  # `script:` resolves from the REPOSITORY ROOT, unlike metadata/catalog above.
+  - name: smoke
+    script: bsdtar/tests/smoke.star
+
+annotations:
+  # hermeticbuild/bsdtar-prebuilt is Apache-2.0 (gh api …/license); the binary
+  # is libarchive's bsdtar, BSD-2-Clause. Both recorded in NOTICE.md; the
+  # image license is the most restrictive covering the shipped bytes' source.
+  org.opencontainers.image.licenses: "BSD-2-Clause AND Apache-2.0"
+
+platforms:
+  linux/amd64:
+    runner: ubuntu-latest
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+  linux/arm64:
+    runner: ubuntu-24.04-arm
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+  darwin/amd64:
+    runner: macos-15
+  darwin/arm64:
+    runner: macos-15
+  windows/amd64:
+    runner: windows-latest
+    shell: pwsh
+  windows/arm64:
+    runner: windows-11-arm
+    shell: pwsh
+
+notify:
+  discord:
+    webhook_secret: OCX_MIRROR_DISCORD_HOOK
+    user_id: "227748867204972545"  # pinged in-message on failures
+
+announce:
+  package: hermeticbuild/bsdtar
+  fork: ocx-contrib/index
