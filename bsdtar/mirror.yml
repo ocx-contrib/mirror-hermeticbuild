@@ -101,11 +101,17 @@ bin_scan: off
 # never matches) for the newest (3.8.1+03: all six) and oldest (3.7.2+00:
 # linux/darwin only) release; `package check --dry-run` reports no ambiguity.
 # Upstream coverage: linux/darwin amd64+arm64 from 3.7.2, windows/amd64 from
-# 3.7.4+04, windows/arm64 from 3.7.9. An older version simply resolves no asset
+# 3.7.4+04, windows/arm64 from 3.8.1+03 (see above). An older version simply resolves no asset
 # for a later-added platform and self-skips — no per-platform floor needed.
 # Windows spelling drifted: `tar_windows_amd64.exe` on v3.7.5 only,
 # `tar_windows_x86_64.exe` everywhere else, so one pattern admits both (no
 # release carries both, so it never double-matches).
+# Upstream MISLABELS four Windows assets, measured with `file` and excluded in
+# scripts/generate.py (MISLABELED): v3.7.5's `tar_windows_amd64.exe` is an ELF
+# (CI: "This version of %1 is not compatible with the version of Windows"), and
+# `tar_windows_arm64.exe` is an x86-64 PE on v3.7.9, v3.8.1 and v3.8.1-fix.1.
+# So windows/arm64 effectively starts at 3.8.1+03, the first real ARM64 PE, and
+# windows/amd64 has no 3.7.5+00 tile.
 # Completeness: upstream ships exactly these six names per release
 # (+ SHA256.txt), all declared. All six are uniform raw binaries, so every
 # platform ships in the first push.

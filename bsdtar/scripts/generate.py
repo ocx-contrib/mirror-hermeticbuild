@@ -34,6 +34,20 @@ from ocx_mirror_sdk import github
 
 REPO = "hermeticbuild/bsdtar-prebuilt"
 TAG_RE = re.compile(r"^v(?P<ver>\d+\.\d+\.\d+)(?:-(?:fix\.)?(?P<rev>\d+))?$")
+# Assets whose bytes do not match their name, measured with `file` on the
+# downloaded release assets (not guessed). Emitting them would publish a wrong
+# binary under a platform key, and the CI leg either fails to spawn it or passes
+# it under emulation and verifies the wrong architecture.
+#   v3.7.5   tar_windows_amd64.exe  ELF 64-bit LSB executable (a Linux binary)
+#   v3.7.9, v3.8.1, v3.8.1-fix.1
+#            tar_windows_arm64.exe  PE32+ x86-64 (not ARM64)
+# The first genuine ARM64 PE is v3.8.1-3 (`file`: PE32+ ... ARM64).
+MISLABELED = {
+    ("v3.7.5", "tar_windows_amd64.exe"),
+    ("v3.7.9", "tar_windows_arm64.exe"),
+    ("v3.8.1", "tar_windows_arm64.exe"),
+    ("v3.8.1-fix.1", "tar_windows_arm64.exe"),
+}
 ASSET_RE = re.compile(r"^tar_(linux|darwin|windows)_[a-z0-9_]+(\.exe)?$")
 
 
@@ -73,6 +87,9 @@ def main() -> int:
         assets = {}
         for name, url in urls.items():
             if not ASSET_RE.match(name):
+                continue
+            if (rel.tag_name, name) in MISLABELED:
+                log(f"{rel.tag_name}: skip mislabeled {name}")
                 continue
             if name not in sums:
                 log(f"{rel.tag_name}: {name} missing from SHA256.txt")
