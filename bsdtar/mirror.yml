@@ -145,12 +145,15 @@ catalog:
   logo: ../logo.svg
 
 versions:
-  # `.0`, not `3.7.2`: Version ordering sorts a version WITH build metadata
+  # Owner decision 2026-11-15: only the 3.8.1 line (3 revisions: +00, +01, +03).
+  # `3.8.0`, not `3.8.1`: Version ordering sorts a version WITH build metadata
   # BELOW the same version without it (`Some(build) < None`,
-  # ocx_lib/src/package/version.rs), so a floor of "3.7.2" silently drops
-  # `3.7.2+00` and `3.7.2+01` — observed on `pipeline plan` (11 of 13 listed).
-  min: "3.7.0"
-  new_per_run: 13
+  # ocx_lib/src/package/version.rs), so a floor of "3.8.1" would silently drop
+  # every `3.8.1+NN` (measured: `3.7.2+00`/`+01` vanished under a "3.7.2"
+  # floor). The first run published all 13 revisions back to 3.7.2 before this
+  # floor landed; those tags stay in the registry and the index.
+  min: "3.8.0"
+  new_per_run: 3
   poll_interval: "28 0-23/6 * * *"
 
 tests:
